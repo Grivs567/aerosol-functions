@@ -2,7 +2,9 @@
 
 This package is a collection of tools to analyze and visualize atmospheric aerosol and ion data.
 
-Latest version: 0.1.15
+Latest version: 0.1.16
+
+See [`aerosol-studio`](https://github.com/Grivs567/aerosol-studio) for a GUI-based aerosol number size distribution analysis workflow.
 
 ## Installation
 

@@ -4,25 +4,53 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as dts
 from matplotlib import colors
 from matplotlib.pyplot import cm
-from datetime import datetime, timedelta
-from scipy.optimize import minimize
 
-def plot_one_to_one_line(ax=None, color='black', linestyle='--', linewidth=1):
+def plot_one_to_one_line(ax=None, color='black', linestyle='--', linewidth=1,
+                         shade_frac=0.10, shade_color='grey', shade_alpha=0.3):
     """
-    Draws a one-to-one line (y = x) on the visible part of the plot.
-    
+    Plot a 1:1 reference line and a shaded fractional deviation region.
+
+    The function plots a line corresponding to ``y = x`` within the
+    overlapping visible axis range and optionally shades a symmetric
+    fractional interval around the line (e.g. ±10%).
+
     Parameters
     ----------
+    ax : matplotlib.axes.Axes, optional
+        Matplotlib axes object on which to draw the line and shaded region.
+        If ``None``, the current axes returned by ``matplotlib.pyplot.gca()``
+        are used.
+    color : str, default='black'
+        Color of the 1:1 reference line.
+    linestyle : str, default='--'
+        Line style of the 1:1 reference line.
+    linewidth : float, default=1
+        Width of the 1:1 reference line.
+    shade_frac : float, default=0.10
+        Fractional deviation used for the shaded region around the 1:1 line.
+        For example, ``0.10`` corresponds to a ±10% region.
+    shade_color : str, default='grey'
+        Fill color of the shaded fractional deviation region.
+    shade_alpha : float, default=0.3
+        Alpha transparency value for the shaded region.
 
-    ax : matplotlib.axes.Axes (optional)
-        The axes to draw the line on. If `None`, uses current axes.
-    color : str
-        Color of the line.
-    linestyle : str 
-        Style of the line (e.g., `'--'` for dashed)
-    linewidth : float 
-        Width of the line
+    Returns
+    -------
+    line_handle : matplotlib.lines.Line2D
+        Handle to the plotted 1:1 line.
+    shade_handle : matplotlib.collections.FillBetweenPolyCollection
+        Handle to the shaded fractional deviation region.
 
+    Notes
+    -----
+    The original axis limits are restored after plotting to avoid modifying
+    the current view extent.
+
+    Examples
+    --------
+    >>> fig, ax = plt.subplots()
+    >>> ax.scatter(x, y)
+    >>> plot_one_to_one_line(ax=ax, shade_frac=0.2)
     """
 
     if ax is None:
@@ -32,84 +60,39 @@ def plot_one_to_one_line(ax=None, color='black', linestyle='--', linewidth=1):
     xmin, xmax = ax.get_xlim()
     ymin, ymax = ax.get_ylim()
 
-    # Define the range for the one-to-one line
-    line_min = max(xmin, ymin)
-    line_max = min(xmax, ymax)
-    
-    # Plot the one-to-one line
-    p = ax.plot([line_min, line_max], [line_min, line_max], color=color, linestyle=linestyle, linewidth=linewidth)[0]
+    # Define the valid range for the 1:1 line
+    line_min = min(xmin, ymin)
+    line_max = max(xmax, ymax)
 
-    # Reset limits to ensure they don't change after plotting the line
-    ax.set_xlim(xmin, xmax)
-    ax.set_ylim(ymin, ymax)
+    # X range for line and shading
+    x = [line_min, line_max]
 
-    return p
+    # Plot the 1:1 line
+    line_handle = ax.plot(
+        x, x,
+        color=color,
+        linestyle=linestyle,
+        linewidth=linewidth,
+        label='1:1'
+    )[0]
 
+    # Plot ±10% shaded region
+    shade_handle = ax.fill_between(
+        x,
+        [(1 - shade_frac) * xi for xi in x],
+        [(1 + shade_frac) * xi for xi in x],
+        color=shade_color,
+        alpha=shade_alpha,
+        linewidth=0,
+        label=f'±{int(shade_frac*100)}%'
+    )
 
-def set_legend_outside(ax,handles=None,labels=None,coords=(1,1),**kwargs):
-    """
-    Put legend outside axes (upper right corner)
+    # Restore original limits
+    #ax.set_xlim(xmin, xmax)
+    #ax.set_ylim(ymin, ymax)
+    ax.margins(x=0, y=0)
 
-    Parameters
-    ----------
-
-    ax : Axes
-        axes to add the legend to
-
-    handles : list of handles
-        list of lines or points in the legend
-
-    labels : list of strings
-        labels for the legend entries
-
-    coords : tuple of floats or ints
-        anchor point for the legend
-
-    kwargs : 
-        other parameters passed to legend  
-
-    Returns
-    -------
-
-    Legend
-
-    """
- 
-    if ((handles is not None) and (labels is not None)):
-        leg = ax.legend(
-            handles,
-            labels,
-            bbox_to_anchor=coords, 
-            loc='upper left',
-            borderaxespad=0,
-            frameon=False,
-            **kwargs)
-    elif handles is not None:
-        leg = ax.legend(
-            handles=handles,
-            bbox_to_anchor=coords, 
-            loc='upper left',
-            borderaxespad=0,
-            frameon=False,
-            **kwargs)
-    elif labels is not None:
-        leg = ax.legend(
-            labels,
-            bbox_to_anchor=coords, 
-            loc='upper left',
-            borderaxespad=0,
-            frameon=False,
-            **kwargs)
-    else:
-        leg = ax.legend(
-            bbox_to_anchor=coords, 
-            loc='upper left',
-            borderaxespad=0,
-            frameon=False,
-            **kwargs)
-
-    return leg
-
+    return line_handle, shade_handle
 
 def rotate_xticks(ax,degrees):
     """

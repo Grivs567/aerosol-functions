@@ -7,10 +7,9 @@ from matplotlib.pyplot import cm
 from datetime import datetime, timedelta
 from scipy.optimize import minimize
 from scipy.interpolate import interp1d
-from scipy.integrate import trapezoid
 from astral import Observer
 from astral.sun import noon
-from scipy.signal import correlate, correlation_lags, fftconvolve
+from scipy.signal import correlate, correlation_lags
 
 
 # All constants are SI base units
@@ -18,6 +17,9 @@ E=1.602E-19           # elementary charge
 E_0=8.85418781e-12    # permittivity of vacuum
 K_B=1.381e-23         # Boltzmann constant 
 R=8.3413              # gas constant
+
+# THAB mobility (cm2V-1S-1)
+Z_THA = 0.97
 
 # Helper functions
 def is_input_float(args):
@@ -167,30 +169,39 @@ def dndlogdp2dn(df):
 
     return df*dlogdp
 
-def air_viscosity(temp):
+def gas_viscosity(temp,gas="air"):
     """ 
-    Calculate air viscosity using Enskog-Chapman theory
+    Calculate gas viscosity using Enskog-Chapman theory
 
     Parameters
     ----------
 
     temp : float or series of length n
-        air temperature, unit: K  
+        air temperature, unit: K
+    gas : str
+        Either `air` (default) or `nitrogen`
 
     Returns
     -------
 
     float or series of length n
-        viscosity of air, unit: m2 s-1  
+        viscosity of gas, unit: m2 s-1  
 
     """
 
-    nyy_ref=18.203e-6
-    S=110.4
-    temp_ref=293.15
-    return nyy_ref*((temp_ref+S)/(temp+S))*((temp/temp_ref)**(3./2.))
+    if gas=="air":
+        mu0=18.203e-6
+        S=110.4
+        T0=293.15
+        return mu0*((T0+S)/(temp+S))*((temp/T0)**(3./2.))
 
-def mean_free_path(temp,pres):
+    if gas=="nitrogen":
+        mu0 = 1.663e-5
+        T0 = 273.15
+        S = 111.0
+        return mu0*(temp/T0)**(3/2)*((T0+S)/(temp+S))
+
+def mean_free_path(temp,pres,gas="air"):
     """ 
     Calculate mean free path in air
 
@@ -201,12 +212,14 @@ def mean_free_path(temp,pres):
         air temperature, unit: K  
     pres : float or series of length n
         air pressure, unit: Pa
+    gas : str
+        air (default) or nitrogen
 
     Returns
     -------
 
     float or series of length n
-        mean free path in air, unit: m
+        mean free path in gas, unit: m
 
     """
 
@@ -219,19 +232,23 @@ def mean_free_path(temp,pres):
 
     idx = get_index([temp,pres])
 
-    Mair=0.02897
-    mu=air_viscosity(temp)
-
-    l = (mu.values/pres.values)*((np.pi*R*temp.values)/(2.*Mair))**0.5
+    if gas=="air":
+        M=0.02897
+    if gas=="nitrogen":
+        M=0.02801
+        
+    mu = gas_viscosity(temp,gas=gas)
+    
+    l = (mu.values/pres.values)*((np.pi*R*temp.values)/(2.*M))**0.5
 
     if float_input:
         return l[0]
     else:
         return pd.Series(index=idx,data=l)
 
-def slipcorr(dp,temp=293.15,pres=101325.):
+def slipcorr(dp,temp=293.15,pres=101325.,gas="air"):
     """
-    Slip correction factor in air 
+    Slip correction factor in gas 
 
     Parameters
     ----------
@@ -242,6 +259,8 @@ def slipcorr(dp,temp=293.15,pres=101325.):
         air temperature, unit K 
     pres : float or series of lenght n
         air pressure, unit Pa
+    gas : str
+        air (default) or nitrogen
 
     Returns
     -------
@@ -269,7 +288,7 @@ def slipcorr(dp,temp=293.15,pres=101325.):
 
     idx = get_index([temp,pres])
 
-    l = mean_free_path(temp,pres).values.reshape(-1,1)
+    l = mean_free_path(temp,pres,gas=gas).values.reshape(-1,1)
     dp = dp.values
     cc = 1.+((2.*l)/dp)*(1.246+0.420*np.exp(-(0.87*dp)/(2.*l)))
 
@@ -278,7 +297,8 @@ def slipcorr(dp,temp=293.15,pres=101325.):
     else:
         return pd.DataFrame(index = idx, columns = dp, data = cc)
 
-def particle_diffusivity(dp,temp=293.15,pres=101325.):
+        
+def particle_diffusivity(dp,temp=293.15,pres=101325.,gas="air"):
     """ 
     Particle brownian diffusivity in air 
 
@@ -291,6 +311,8 @@ def particle_diffusivity(dp,temp=293.15,pres=101325.):
         air temperature, unit: K 
     pres : float or series of lenght n
         air pressure, unit: Pa
+    gas : str
+        air (default) or nitrogen
 
     Returns
     -------
@@ -309,8 +331,8 @@ def particle_diffusivity(dp,temp=293.15,pres=101325.):
 
     idx = get_index([temp,pres])
 
-    cc = slipcorr(dp,temp,pres)
-    mu = air_viscosity(temp)
+    cc = slipcorr(dp,temp,pres,gas=gas)
+    mu = gas_viscosity(temp,gas=gas)
 
     cc = cc.values
     dp = dp.values
@@ -366,7 +388,7 @@ def particle_thermal_speed(dp,temp):
     else:
         return pd.DataFrame(index = idx, columns = dp, data = vp)
 
-def particle_mean_free_path(dp,temp=293.15,pres=101325.):
+def particle_mean_free_path(dp,temp=293.15,pres=101325.,gas="air"):
     """ 
     Particle mean free path in air 
 
@@ -379,6 +401,8 @@ def particle_mean_free_path(dp,temp=293.15,pres=101325.):
         air temperature, unit: K 
     pres : float or series of length n
         air pressure, unit: Pa
+    gas : str
+        air (default) or nitrogen
 
     Returns
     -------
@@ -396,7 +420,7 @@ def particle_mean_free_path(dp,temp=293.15,pres=101325.):
 
     idx = get_index([temp,pres])
 
-    D=particle_diffusivity(dp,temp,pres)
+    D=particle_diffusivity(dp,temp,pres,gas=gas)
     c=particle_thermal_speed(dp,temp)
 
     v_therm = (8.*D.values)/(np.pi*c.values)
@@ -406,7 +430,7 @@ def particle_mean_free_path(dp,temp=293.15,pres=101325.):
     else:
         return pd.DataFrame(index=idx, columns=dp, data=v_therm)
 
-def coagulation_coef(dp1,dp2,temp=293.15,pres=101325.):
+def coagulation_coef(dp1,dp2,temp=293.15,pres=101325.,gas="air"):
     """ 
     Calculate Brownian coagulation coefficient (Fuchs)
 
@@ -421,6 +445,8 @@ def coagulation_coef(dp1,dp2,temp=293.15,pres=101325.):
         air temperature, unit: K 
     pres : float or series of lenght n
         air pressure, unit: Pa
+    gas : str
+        air (default) or nitrogen
 
     Returns
     -------
@@ -448,12 +474,12 @@ def coagulation_coef(dp1,dp2,temp=293.15,pres=101325.):
     idx = get_index([temp,pres])
 
     def particle_g(dp,temp,pres):
-        l = particle_mean_free_path(dp,temp,pres).values
+        l = particle_mean_free_path(dp,temp,pres,gas=gas).values
         dp = dp.values
         return 1./(3.*dp*l)*((dp+l)**3.-(dp**2.+l**2.)**(3./2.))-dp
 
-    D1 = particle_diffusivity(dp1,temp,pres).values
-    D2 = particle_diffusivity(dp2,temp,pres).values
+    D1 = particle_diffusivity(dp1,temp,pres,gas=gas).values
+    D2 = particle_diffusivity(dp2,temp,pres,gas=gas).values
     g1 = particle_g(dp1,temp,pres)
     g2 = particle_g(dp2,temp,pres)
     c1 = particle_thermal_speed(dp1,temp).values
@@ -567,107 +593,6 @@ def cs2coags(cs,dp,m=-1.6):
     """
 
     return cs * (dp/0.71)**m
-
-
-
-def diam2mob(dp,temp=293.15,pres=101325.0,ne=1):
-    """ 
-    Convert electrical mobility diameter to electrical mobility in air
-
-    Parameters
-    ----------
-
-    dp : float
-        particle diameter(s),
-        unit : nm
-    temp : float
-        ambient temperature
-        default 20 C 
-        unit: K
-    pres : float
-        ambient pressure,
-        default 1 atm 
-        unit: Pa
-    ne : int
-        number and polarity of charges on the aerosol particle
-        default 1
-
-    Returns
-    -------
-
-    float
-        particle electrical mobility, 
-        unit: cm2 s-1 V-1
-
-    """
-
-    cc = slipcorr(dp*1e-9,temp,pres) # dataframe
-    mu = air_viscosity(temp) # series
-
-    Zp = (ne*E*cc)/(3.*np.pi*mu*dp*1e-9)*1e4
-
-    return Zp
-
-def mob2diam(Zp,temp=293.15,pres=101325.,ne=1, tol=1e-3, maxiter=100):
-    """
-    Convert electrical mobility to electrical mobility diameter in air
-
-    Parameters
-    ----------
-
-    Zp : float
-        particle electrical mobility or mobilities, 
-        unit: cm2 s-1 V-1
-    temp : float
-        ambient temperature, 
-        unit: K
-    pres : float
-        ambient pressure, 
-        unit: Pa
-    ne : integer
-        number and polarity of elementary charges on the aerosol particle
-
-    Returns
-    -------
-
-    float
-        particle diameter, unit: m
-    
-    """
-    
-    ne = np.abs(ne)
-    Zp = np.abs(Zp)
-
-    def minimize_this(dp,Z):
-        return np.abs(diam2mob(dp,temp,pres,ne)-Z)
-
-    # Initial guessing
-    if (Zp>0.1):
-        dp0=1.0
-    elif (Zp>0.001):
-        dp0=10.0
-    elif (Zp>=0.001):
-        dp0=50.0
-    elif (Zp>=0.0001):
-        dp0=150.0
-    elif (Zp>=0.00001):
-        dp0=1000.0
-    else:
-        dp0=10000.0
-
-    # Optimization using Nelder Mead method
-    diam = minimize(minimize_this, 
-        dp0, 
-        args=(Zp,), 
-        tol=tol, 
-        method='Nelder-Mead',
-        options={"maxiter":maxiter})
-
-    if not diam.success:
-        return np.nan
-    else:
-        return diam.x[0]
-
 
 def binary_diffusivity(temp,pres,Ma,Mb,Va,Vb):
     """ 
@@ -837,7 +762,7 @@ def calc_cs(df,temp=293.15,pres=101325.):
 
     df2 = pd.DataFrame(1e6*dn.values*(b.values*dp.values)).sum(axis=1,min_count=1) #dataframe
 
-    cs = (4.*np.pi*diffu.values)*df2.values
+    cs = (2.*np.pi*diffu.values)*df2.values
 
     return pd.Series(index = df.index, data = cs)
 
@@ -891,9 +816,9 @@ def calc_conc(df,dmin,dmax,frac=0.5):
     return conc_df
 
 def filter_nans(df, threshold=0.0, axis=1):
-    if (axis==0):
+    if (axis==0): # selects columns
         df_filt = df.iloc[:,(df.isnull().mean(axis=axis)<=threshold).values]
-    if (axis==1):
+    if (axis==1): # selects rows
         df_filt = df.iloc[(df.isnull().mean(axis=axis)<=threshold).values,:]
 
     if isinstance(df_filt, pd.Series):
@@ -934,9 +859,6 @@ def calc_conc_interp(df,dmin,dmax,threshold=0.0):
 
     """
 
-    #dmin = pd.Series(dmin)
-    #dmax = pd.Series(dmax)
-
     # Find the columns with dmin and dmax
     dp = df.columns.astype(float).values
 
@@ -967,7 +889,7 @@ def calc_conc_interp(df,dmin,dmax,threshold=0.0):
     for j in range(data.shape[0]):
         data_interp[j,:] = np.interp(dp_grid,logdp,data[j,:])
 
-    conc = trapezoid(data_interp, x = dp_grid, axis=1)
+    conc = np.trapezoid(data_interp, dp_grid, axis=1)
 
     conc_s = pd.Series(index = df_filt.index, data = conc)
 
@@ -1198,66 +1120,6 @@ def calc_ion_formation_rate(
 
     return results_negions, results_posions
 
-def tubeloss(diam, flowrate, tubelength, temp=293.15, pres=101325.):
-    """
-    Calculate diffusional particle losses to walls of
-    straight cylindrical tube assuming a laminar flow regime
-
-    Parameters
-    ----------
-    
-    diam : float or series of length m
-        Particle diameters for which to calculate the
-        losses, unit: m
-    flowrate : float or series of length n
-        unit: L/min
-    tubelength : float
-        Length of the cylindrical tube
-        unit: m
-    temp : float or series of length n
-        temperature
-        unit: K
-    pres : float or series of lenght n
-        air pressure
-        unit: Pa
-
-    Returns
-    -------
-
-    float or dataframe of shape (n,m)
-        Fraction of particles passing through.
-        Each column represents diameter and each
-        each row represents different temperature
-        pressure and flowrate value
-        
-    """
-
-    float_input=is_input_float([diam,flowrate,temp,pres])
-
-    temp=pd.Series(temp)
-    pres=pd.Series(pres)
-    diam=pd.Series(diam)
-    flowrate = pd.Series(flowrate)*1.667e-5
-
-    idx = get_index([temp,pres,flowrate])
-    
-    D = particle_diffusivity(diam,temp,pres)
-
-    rmuu = D.values*tubelength*(1./flowrate.values.reshape(-1,1))
-    
-    penetration = np.nan*np.ones(rmuu.shape)
-
-    condition1 = (rmuu<0.009)
-    condition2 = (rmuu>=0.009)
-
-    penetration[condition1] = 1.-5.5*rmuu[condition1]**(2./3.)+3.77*rmuu[condition1]
-    penetration[condition2] = 0.819*np.exp(-11.5*rmuu[condition2])+0.0975*np.exp(-70.1*rmuu[condition2])
-    
-    if float_input:
-        return penetration[0][0]
-    else:
-        return pd.DataFrame(index=idx,columns=diam.values,data=penetration)
-
 def surf_dist(df):
     """
     Calculate the aerosol surface area size distribution
@@ -1402,209 +1264,6 @@ def calc_ldsa(df):
 
     return df_ldsa
 
-def flow_velocity_in_pipe(tube_diam,flowrate):
-    """
-    Calculate fluid speed from the flow rate in circular tube
- 
-    Parameters
-    ----------
-
-    tube_diam : float or series of lenght m
-        Diameter of circular tube (m)
-    flowrate : float or series of lenght n
-        Volumetric flow rate (lpm)
-
-    Returns
-    -------
-
-    float or dataframe of shape (n,m)
-        Speed of fluid (m/s) 
-
-    """
-
-    float_input = is_input_float([tube_diam,flowrate])
-
-    tube_diam = pd.Series(tube_diam)
-    flowrate = pd.Series(flowrate)
- 
-    tube_diam = tube_diam.values
-    flowrate = flowrate.values.reshape(-1,1)
-    
-    volu_flow = flowrate/60000.
-    cross_area = np.pi*(tube_diam/2.)**2
-    
-    vel = volu_flow/cross_area
-
-    if float_input:
-        return vel[0][0] 
-    else:
-        return pd.DataFrame(index = flowrate.flatten(), columns = tube_diam, data = vel)
-
-def pipe_reynolds(
-    tube_diam,
-    flowrate,
-    temp=293.15,
-    pres=101325.0):
-    """
-    Calculate Reynolds number in a tube
-
-    Parameters
-    ----------
-
-    tube_diam : float or series of length m
-        Inner diameter of the tube (m)
-    flowrate : float or series of lenght n
-        Volumetric flow rate (lpm)
-    temp : float or series of length n
-        Temperature in K
-    pres : float or series of length n
-        Pressure in Pa
-
-    Returns
-    -------
-
-    float or dataframe of shape (n,m)
-        Reynolds number
-
-    """
-
-    float_input = is_input_float([tube_diam,flowrate,temp,pres])
-
-    tube_diam = pd.Series(tube_diam)
-    flowrate = pd.Series(flowrate)
-    temp = pd.Series(temp)
-    pres = pd.Series(pres)
-
-    idx = get_index([flowrate,temp,pres]) 
-
-    tube_diam = tube_diam.values
-    flowrate = flowrate.values.reshape(-1,1)
-         
-    volu_flow = flowrate/60000.
-    visc = air_viscosity(temp)
-    dens = air_density(temp,pres)
-
-    visc = visc.values.reshape(-1,1)
-    dens = dens.values.reshape(-1,1)
-
-    Re = (dens*volu_flow*tube_diam)/(visc*np.pi*(tube_diam/2.0)**2)
-
-    if float_input:
-        return Re[0][0]
-    else:
-        return pd.DataFrame(index = idx, columns=tube_diam, data=Re)
-
-def thab_dp2volts(thab_voltage,dp):
-    """
-    Convert particle diameters to DMA voltages
-
-    Parameters
-    ----------
-
-    thab_voltage : float
-        Voltage at THA+ peak (V)
-    dp : float or series
-        Particle diameters (nm)
-
-    Returns
-    -------
-
-    float or series:
-        DMA voltage (V) corresponding to dp
-
-    Notes
-    -----
-    
-    See https://doi.org/10.1016/j.jaerosci.2005.02.009
-
-    Assumptions:
-
-    1) Sheath flow is air
-    2) Mobility standard used is THA+ monomer
-    3) T = 293.15 K and p = 101325 Pa
-
-    """
-
-    thab_mob = (1.0/1.03)
-        
-    Zp = diam2mob(dp,293.15,101325.0,1)
-   
-    return (thab_voltage * thab_mob)/Zp
-
-
-def thab_volts2dp(thab_voltage,dma_voltage):
-    """
-    Convert DMA voltages to particle diameters
-
-    Parameters
-    ----------
-
-    thab_voltage : float
-        Voltage at THA+ peak (V)
-    dma_voltage : float
-        DMA voltage (V)
-
-    Returns
-    -------
-
-    float:
-        particle diameter corresponding to DMA voltage (nm)
-
-    Notes
-    -----
-    
-    See https://doi.org/10.1016/j.jaerosci.2005.02.009
-
-    Assumptions:
-
-    1) Sheath flow is air
-    2) Mobility standard used is THA+ monomer
-    3) T = 293.15 K and p = 101325 Pa
-
-    """
-
-    thab_mob = (1.0/1.03)
-        
-    Zp = (thab_voltage*thab_mob)/dma_voltage
-
-    dp = mob2diam(Zp,293.15,101325.0,1)
-    
-    return dp
-
-def eq_charge_frac(dp,N):
-    """
-    Calculate equilibrium charge fraction using Wiedensohler (1988) approximation
-
-    Parameters
-    ----------
-
-    dp : float
-        Particle diameter (m)
-    N : int
-        Amount of elementary charge in range [-2,2]
-
-    Returns
-    -------
-
-    float
-        Fraction of particles of diameter dp having N 
-        elementary charges 
-
-    """
-
-    a = {-2:np.array([-26.3328,35.9044,-21.4608,7.0867,-1.3088,0.1051]),
-        -1:np.array([-2.3197,0.6175,0.6201,-0.1105,-0.1260,0.0297]),
-        0:np.array([-0.0003,-0.1014,0.3073,-0.3372,0.1023,-0.0105]),
-        1:np.array([-2.3484,0.6044,0.4800,0.0013,-0.1544,0.0320]),
-        2:np.array([-44.4756,79.3772,-62.8900,26.4492,-5.7480,0.5059])}
-
-    if (np.abs(N)>2):
-        raise Exception("Number of elementary charges must be 2 or less")
-    elif ((dp<20e-9) & (np.abs(N)==2)):
-        return 0
-    else:
-        return 10**np.sum(a[N]*(np.log10(dp*1e9)**np.arange(6)))
-
 def utc2solar(utc_time,lon,lat):
     """  
     Convert utc time to solar time (solar maximum occurs at noon)
@@ -1642,41 +1301,6 @@ def utc2solar(utc_time,lon,lat):
     solar_time = pd.to_datetime(dts.num2date(solar_time_num)).tz_convert(None)
     
     return solar_time
-
-
-
-
-def calc_mob_ratio(neg_ions,pos_ions):
-    
-    neg_ions[neg_ions<=0] = np.nan
-    pos_ions[pos_ions<=0] = np.nan
-
-    neg_ions = neg_ions.interpolate(limit_direction="both",axis=1).rolling(window=5).median().interpolate(limit_direction="both")
-    pos_ions = pos_ions.interpolate(limit_direction="both",axis=1).rolling(window=5).median().interpolate(limit_direction="both")
-
-    x = np.exp(np.log(neg_ions.values/pos_ions.values)/2.0)
-
-    return pd.DataFrame(index = neg_ions.index, columns=neg_ions.columns, data=x)
-
-def atmo_ion_frac(dp,q,temp=273.15,mob_ratio=1.0):
-
-    if (np.abs(q)==1):
-        alpha = 0.9630*np.exp(7.6019/(dp+2.2476))
-    elif (np.abs(q)==2):
-        alpha = 0.9826+0.9435*np.exp(-0.0478*dp)
-    else:
-        alpha = 1.0
-   
-    x = mob_ratio
-    T = temp
-
-    f = (E/np.sqrt(4*np.pi**2*E_0*alpha*dp*K_B*T)*
-            np.exp( 
-                (-(q-(2*np.pi*E_0*alpha*dp*K_B*T)/(E**2)*np.log(x))**2)/
-                ((4*np.pi*E_0*alpha*dp*K_B*T)/(E**2)) 
-            )) 
-    
-    return f
 
 
 def ions2particles(neg_ions,pos_ions,temp=293.15,mob_ratio=1.0):
@@ -1760,304 +1384,38 @@ def ions2particles(neg_ions,pos_ions,temp=293.15,mob_ratio=1.0):
 
     return pd.DataFrame(data=particles,index = neg_ions.index,columns=neg_ions.columns)
 
-def calc_tube_residence_time(tube_diam,tube_length,flowrate):
+def calc_ion_production_rate(clus_ion_conc, dp_clus, cs):
     """
-    Calculate residence time in a circular tube
+    Calculate the ion production rate from sink and ion concentration
 
     Parameters
     ----------
 
-    tube_diam : float or series of length m
-        Inner diameter of the tube (m)
-    tube_length : float or series of length m
-        Length of the tube (m)
-    flowrate : float or series of length n
-        Volumetric flow rate (lpm)
-
-    Returns
-    -------
-
-    float or dataframe of shape (n,m)
-        Average residence time in seconds
-
-    """
-
-    float_input = is_input_float([tube_diam,tube_length,flowrate])
-
-    tube_diam = pd.Series(tube_diam)
-    tube_length = pd.Series(tube_length)
-    flowrate = pd.Series(flowrate)
-
-    tube_diam = tube_diam.values
-    tube_length = tube_length.values
-    flowrate = flowrate.values.reshape(-1,1)
-         
-    volu_flow = flowrate/60000.
-    tube_volume = np.pi*tube_diam**2*(1/4.)*tube_length
-
-    rt = tube_volume/volu_flow
-
-    if float_input:
-        return rt[0][0]
-    else:
-        return pd.DataFrame(index = flowrate.flatten(), columns=tube_volume, data=rt)
-
-def calc_ion_production_rate(
-    df_ions,
-    df_particles,
-    temp=293.15,
-    pres=101325.0):
-    """
-    Calculate the ion production rate from measurements
-
-    Parameters
-    ----------
-
-    df_ions : dataframe of shape (n,m)
-        negative or positive ion number size distribution unit cm-3
-    df_particles : dataframe of shape (n,m)
-        particle number size distribution unit cm-3
-    temp : float or series of length n
-        ambient temperature unit K
-    pres : float or series of length n
-        ambient pressure unit Pa
+    clus_ion_conc : series of length n
+        Cluster ion concentration from negative or positive polarity in cm-3
+    dp_clus : float
+        Cluster ion diameter in nm
+    cs : series of length n
+        Particle number size distribution unit cm-3
+        
 
     Returns
     -------
 
     series of lenght n
-        ion production rate in cm-3 s-1
+        Ion production rate in cm-3 s-1
 
     Notes
     -----
 
+    Assume balance between cluster ion polarities
+
     """
 
-    temp = pd.Series(temp)
-    pres = pd.Series(pres)
-
-    if len(temp)==1:
-        temp = pd.Series(index = df_ions.index, data = temp)
-    else:
-        temp = temp.reindex(df_ions.index, method="nearest")
-
-    if len(pres)==1:
-        pres = pd.Series(index = df_ions.index, data = pres)
-    else:
-        pres = pres.reindex(df_ions.index, method="nearest")
-
+    coags = cs2coags(cs,dp_clus,m=-1.6)
     alpha = 1.6e-6 # cm3 s-1
-    dp1 = 1e-9
-    dp2 = 2e-9
     
-    cluster_ion_conc = calc_conc(df_ions,dp1,dp2)
-    
-    ion_dp = df_ions.columns.values.astype(float)
-    
-    findex = np.argwhere((ion_dp>dp1) & (ion_dp<dp2)).flatten() 
-
-    sink_term = np.zeros(df_ions.shape[0])
-    for dp in ion_dp[findex]: 
-        sink_term = sink_term + calc_coags(df_particles,dp,temp,pres).values.flatten()*cluster_ion_conc.values.flatten()
-    
-    # Ion-ion recombination term
-    rec_term = cluster_ion_conc.values.flatten()**2*alpha
-
-    ion_production_rate = rec_term + sink_term
-
-    return pd.Series(index=df_ions.index, data=ion_production_rate)
-
-def dma_volts2mob(Q,R1,R2,L,V):
-    """
-    Theoretical selected mobility from cylindrical DMA
-
-    Parameters
-    ----------
-
-    Q : float
-        sheath flow rate, unit lpm
-
-    R1 : float
-        inner electrode radius, unit m
-
-    R2 : float
-        outer electrode radius, unit m
-
-    L : float
-        effective electrode length, unit m
-
-    V : float or series
-        applied voltage, unit V
-
-    Returns
-    -------
-
-    float or series
-        selected mobility, unit cm2 s-1 V-1
-
-    """
-
-    return ((Q*1.667e-5)*np.log(R2/R1))/(2.*np.pi*L*V)*1e4
-
-def dma_mob2volts(Q,R1,R2,L,Z):
-    """
-    Cylindrical DMA voltage corresponding to mobility
-
-    Parameters
-    ----------
-
-    Q : float
-        sheath flow rate, unit lpm
-
-    R1 : float
-        inner electrode radius, unit m
-
-    R2 : float
-        outer electrode radius, unit m
-
-    L : float
-        effective electrode length, unit m
-
-    Z : float
-        mobility, unit cm2 s-1 V-1
-
-    Returns
-    -------
-
-    float
-        DMA voltage, unit V
-
-    """
-
-    return ((Q*1.667e-5)*np.log(R2/R1))/(2.*np.pi*L*Z*1e-4)
-
-
-
-def conical_dma_mob2volts(Q, R1_max, R2, L, alpha, Z):
-    """
-    Conical DMA voltage corresponding to mobility
-
-    Parameters
-    ----------
-
-    Q : float
-        sheath flow rate, unit lpm
-
-    R1_max : float
-        inner electrode radius at outlet at distance L, unit m
-
-    R2 : float
-        outer electrode radius, unit m
-
-    L : float
-        effective electrode length, unit m
-        
-    alpha : float
-        tapering angle, unit degrees
-
-    Z : float
-        mobility, unit cm2 s-1 V-1
-
-    Returns
-    -------
-
-    float
-        DMA voltage, unit V
-
-    """
-
-    # Convert to radians
-    alpha = alpha*(np.pi/180.)
-    
-    # Calculate the geometric factor K_T
-    x = np.linspace(0,L,100)
-    Rx = R1_max - (L-x) * np.tan(alpha)
-    K_T = np.log(R2/R1_max)/L * np.trapz(y = 1./np.log(R2/Rx), x = x)
-    
-    # Calculate the voltage
-    V = ((Q*1.667e-5)*np.log(R2/R1_max))/(2*np.pi*L*(Z*1e-4)*K_T)
-    
-    return V
-
-
-def tubeloss_turbulent(diam, flowrate, tube_length, tube_diam, temp=293.15, pres=101325.):
-    """
-    Calculate particle losses to walls of a straight cylindrical 
-    tube assuming a turbulent flow regime and air as the carrier gas.
-
-    Parameters
-    ----------
-    
-    diam : float or series of length m
-        Particle diameters for which to calculate the
-        losses, unit: m
-    flowrate : float or series of length n
-        unit: L/min
-    tube_length : float
-        Length of the cylindrical tube
-        unit: m
-    tube_diam : float
-        Diameter of the cylindrical tube
-        unit: m
-    temp : float or series of length n
-        temperature
-        unit: K
-    pres : float or series of lenght n
-        air pressure
-        unit: Pa
-
-    Returns
-    -------
-
-    float or dataframe of shape (n,m)
-        Fraction of particles passing through.
-        Each column represents diameter and each
-        each row represents different temperature
-        pressure and flowrate value
-
-    """
-    
-    float_input=is_input_float([diam,flowrate,temp,pres])
-
-    temp=pd.Series(temp)
-    pres=pd.Series(pres)
-    diam=pd.Series(diam)
-    flowrate = pd.Series(flowrate)*1.667e-5
-
-    idx = get_index([temp,pres,flowrate])
-    
-    # Average flow velocity
-    flow_velo = flow_velocity_in_pipe(tube_diam, flowrate) # shape: (len(flowrate),len(tube_diam)) or float
-    flow_velo = flow_velo.values.flatten()
-
-    # Reynolds number
-    Re = pipe_reynolds(tube_diam, flowrate, temp, pres) # shape: (maxlen(flowrate,temp,pres),len(tube_diam)) or float
-    Re = Re.values.flatten()
-
-    # Particle diffusivity
-    D = particle_diffusivity(diam,temp,pres) # shape: (maxlen(temp,pres),len(diam)) or float
-    D = D.values
-
-    # Air density
-    air_dens = air_density(temp,pres) # shape: maxlen(temp,pres) or float
-    air_dens = air_dens.values.flatten()
-
-    # Air viscosity
-    air_visc = air_viscosity(temp) # shape: len(temp) or float
-    air_visc = air_visc.values.flatten()
-
-    # Diffusive deposition velocity
-    #V_d = ((0.04*flow_velo)/(Re**(1/4.)))*((air_dens*D)/(air_visc))**(2/3.)
-
-    delta = (28.5*tube_diam*D**(1/4.))/(Re**(7/8.)*(air_visc/air_dens)**1/4.) 
-    V_d = D/delta
-
-    penetration = np.exp(-(4*V_d*tube_length)/(tube_diam * flow_velo))
-
-    if float_input:
-        return penetration[0][0]
-    else:
-        return pd.DataFrame(index=idx,columns=diam.values,data=penetration)
+    return (coags + alpha * clus_ion_conc) * clus_ion_conc
 
 def sample_from_dist(x,y,n):
     """
@@ -2093,22 +1451,7 @@ def sample_from_dist(x,y,n):
 
 
 def denan(df):
-    """
-    Interpolate away any nans and drop nan tails
-
-    Parameters
-    ----------
-
-    df : pandas datafarme
-
-    Returns
-    -------
-
-    pandas dataframe
-
-    """
     return df.interpolate(limit_area="inside").dropna(how="all",axis=0)
-
 
 def nanoranking(conc, nan_threshold=0, include_concs=False):
     """
@@ -2139,7 +1482,7 @@ def nanoranking(conc, nan_threshold=0, include_concs=False):
     Notes
     -----
 
-    The nanorank is calculated for one day day. See Aliaga et al 2023  
+    The nanorank is calculated for one day. See Aliaga et al 2023  
 
     """
 
@@ -2172,10 +1515,6 @@ def nanoranking(conc, nan_threshold=0, include_concs=False):
     results.index = pd.to_datetime(results.index)
     
     return results
-
-
-def normalize_signal(signal):
-    return (signal - np.min(signal)) / (np.max(signal) - np.min(signal))
 
 def zscore(a):
     a = np.asarray(a, dtype=float)
@@ -2250,28 +1589,27 @@ def cross_corr_gr(
     -------
 
     dictionary
-        Results in a dictionary:
+        If verbose is `True`
 
-        If verbose is True
-
-        `gr`: total growth rate in nm/h
-        `gr_incr`: growth rates in each increment
-        `tau_max_incr`: tau_max in each increment
-        `lag`: lags in seconds for each increment
-        `corr`: cross correlations for each increment
-        `t`: interpolated timestamps (seconds)
-        `n1`: Interpolated unnormalized concs in lower channels
-        `n2`: Interpolated unnormalized concs in upper channels
+        - `gr`: total growth rate in nm/h
+        - `gr_incr`: growth rates in each increment
+        - `tau_max_incr`: tau_max in each increment
+        - `lag`: lags in seconds for each increment
+        - `corr`: cross correlations for each increment
+        - `t`: interpolated timestamps (seconds)
+        - `n1`: Interpolated unnormalized concs in lower channels
+        - `n2`: Interpolated unnormalized concs in upper channels
 
 
-        If verbose is False
-        `gr`: total growth rate in nm/h
+        If verbose is `False`
+        
+        - `gr`: total growth rate in nm/h
 
-    Notes
-    -----
+    References
+    ----------
+
+    Lampilahti et al. (2025): https://doi.org/10.5194/ar-3-637-2025
     
-    
-
     """ 
     
     diams = df.columns.astype(float).values
@@ -2401,5 +1739,3 @@ def cross_corr_gr(
         return {"gr":gr,"gr_incr":all_gr,"tau_max_incr":all_tau_max,"lag":all_lags,"corr":all_corrs,"t":t_grid,"n1":all_channel1,"n2":all_channel2}
     else:
         return {"gr":gr}
-
-

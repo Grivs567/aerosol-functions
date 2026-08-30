@@ -1,4 +1,4 @@
-# Aerosol Number-Size distribution
+# Aerosol number-size distribution
 
 In the functions of this package an aerosol number-size distribution is assumed to be a `pandas DataFrame` where
 

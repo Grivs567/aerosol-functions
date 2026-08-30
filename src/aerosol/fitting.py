@@ -1,16 +1,8 @@
-from sklearn.mixture import GaussianMixture,BayesianGaussianMixture
-from kneed import KneeLocator
+from sklearn.mixture import GaussianMixture
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
 import aerosol.functions as af
 from scipy.optimize import curve_fit
-from joblib import Parallel, delayed
-import time
-from sklearn.metrics import mean_squared_error
-from scipy.signal import savgol_filter
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
 
 def to_meters(x):
     return (10**x)*1e-9
@@ -107,9 +99,6 @@ def fit_multimodal_gaussian(data_x, data_y, gaussians):
 
     return gaussians
 
-def mse(x,x_pred):
-    return np.sum((x - x_pred)**2)
-
 def calc_pred_gaussians(x,gaussians):
     pred_gaussians = []
     for g in gaussians:
@@ -147,10 +136,9 @@ def calc_conc_gaus(x,gaussians):
 def fit_multimode(
     x, 
     y, 
-    timestamp, 
+    timestamp = None, 
     n_modes = 1, 
     n_samples = 10000):
-    
     """
     Fit multimodal Gaussian to aerosol number-size distribution
 
@@ -161,7 +149,7 @@ def fit_multimode(
         log10 of bin diameters in nm.
     y : 1d numpy array
         Number size distribution
-    timestamp : pandas Timestamp
+    timestamp : pandas Timestamp or None
         timestamp associated with the number size distributions
     n_modes : int
         number of modes to fit
@@ -191,24 +179,30 @@ def fit_multimode(
     x_interp = s.index.values
     y_interp = s.values
     
+    
     if np.sum(y_interp)==0:
+        print("sum was zero")
         all_ok = False
-    
-    sensitivity = 3
-    
-    aic_scores = []
 
     if len(x_interp)<5:
+        print("too few points")
         all_ok = False
     else:
         coef = np.trapezoid(y_interp,x_interp)
         samples = af.sample_from_dist(x_interp,y_interp,n_samples)
 
+        #print(coef)
+        #print(samples)
+
         # Initial guess from clustering
         gaussians_gmm = fit_gmm(samples, n_modes, coef)
+        
+        #print(gaussians_gmm)
 
         # The actual fit
         gaussians_lsq = fit_multimodal_gaussian(x_interp, y_interp, gaussians_gmm)
+        
+        #print(gaussians_lsq)
         
         if gaussians_lsq is None:
             print("Least-squares fit failed")
@@ -217,52 +211,57 @@ def fit_multimode(
             pass
 
     if all_ok:
+
         try:
+            print("all was ok")
             # Make sure all the data is json compatible
-            dp = get_peak_positions(gaussians)
-            predicted_ndist = calc_pred(x,gaussians)
-            predicted_gaussians = calc_pred_gaussians(x,gaussians)
-            total_conc = calc_conc_ndist(x,predicted_ndist)
-            mode_concs = calc_conc_gaus(x,gaussians)
-            diams = list(x)
-            if isinstance(timestamp, str):
-                time = timestamp
+            x_points_log = np.linspace(x.min(),x.max(),1000)
+            dp = get_peak_positions(gaussians_lsq)
+            predicted_ndist = calc_pred(x_points_log,gaussians_lsq)
+            predicted_gaussians = calc_pred_gaussians(x_points_log,gaussians_lsq)
+            total_conc = calc_conc_ndist(x_points_log,predicted_ndist)
+            mode_concs = calc_conc_gaus(x_points_log,gaussians_lsq)
+            diams = list(10**x_points_log)
+            if timestamp is None:
+                time = None
             else:    
                 time = timestamp.strftime("%Y-%m-%d %H:%M:%S")
         except:
+            print("fit failed")
             dp = []
             gaussians = []
             gaussians_gmm = []
             gaussians_lsq = []
-            diams = list(x)
+            diams = []
             predicted_ndist = [] 
             predicted_gaussians = []
             total_conc = np.nan
-            mode_concs = [np.nan]
-            if isinstance(timestamp, str):
-                time = timestamp
+            mode_concs = []
+            if timestamp is None:
+                time = None
             else:    
-                time = timestamp.strftime("%Y-%m-%d %H:%M:%S")            
+                time = timestamp.strftime("%Y-%m-%d %H:%M:%S")        
     else:
+        print("fit failed")
         dp = []
         gaussians = []
         gaussians_gmm = []
         gaussians_lsq = []
-        diams = list(x)
+        diams = []
         predicted_ndist = [] 
         predicted_gaussians = []
         total_conc = np.nan
-        mode_concs = [np.nan]
-        if isinstance(timestamp, str):
-            time = timestamp
+        mode_concs = []
+        if timestamp is None:
+            time = None
         else:    
-            time = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+            time = timestamp.strftime("%Y-%m-%d %H:%M:%S")    
             
     # Construct the result dictionary
     result = {
         "time": time,
-        "gaussians": gaussians,
-        "number_of_gaussians": len(gaussians),
+        "gaussians": gaussians_lsq,
+        "number_of_gaussians": len(gaussians_lsq),
         "peak_diams": dp,
         "predicted_ndist": predicted_ndist,
         "diams": diams,

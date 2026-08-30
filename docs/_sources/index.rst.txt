@@ -1,12 +1,32 @@
+Aerosol Functions
+=================
+
+Python tools for aerosol science calculations and data analysis.
+
+`GitHub Repository <https://github.com/jlpl/aerosol-functions>`_
+
+.. toctree::
+   :maxdepth: 2
+
+   aerosol_number_size_distribution
+   aerosol
+
+
 .. aerosol-functions documentation master file, created by
    sphinx-quickstart on Fri Mar 24 23:16:48 2023.
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Welcome to aerosol-functions' documentation!
-============================================
+.. Welcome to aerosol-functions' documentation!
+.. ============================================
 
-.. toctree::
-   :maxdepth: 4
+.. .. toctree::
+..   :maxdepth: 4
 
-   modules
+..   modules
+
+.. Links
+.. =====
+.. 
+.. * `GitHub Repository <https://github.com/jlpl/aerosol-functions>`_
+.. * `Issue Tracker <https://github.com/jlpl/aerosol-functions/issues>`_

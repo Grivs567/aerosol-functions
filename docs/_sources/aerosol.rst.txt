@@ -1,20 +1,26 @@
-aerosol package
-===============
+API Reference
+=============
 
-aerosol.functions module
-------------------------
+Functions Module
+----------------
 
 .. automodule:: aerosol.functions
    :members:
 
-aerosol.plotting module
-------------------------
+Plotting Module
+---------------
 
 .. automodule:: aerosol.plotting
    :members:
 
-aerosol.fitting module
-------------------------
+Fitting Module
+--------------
 
 .. automodule:: aerosol.fitting
+   :members:
+
+Lab Module
+----------
+
+.. automodule:: aerosol.lab
    :members:
